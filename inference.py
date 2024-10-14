@@ -4,7 +4,7 @@ import torch
 import os
 import pandas as pd
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from opencc import OpenCC
+# from opencc import OpenCC
 
 #%%
 # Download the dataset if it does not exist
@@ -111,7 +111,7 @@ system_message_t = "你是一位熟悉電子商務的助手，以下是供你參
 
 prompts_t = [
     '详细了解以下商品名称，尽可能辨认出你认识的所有关键词，并解释。\n{item}',
-    '对该商品名称作命名实体识别（NER），找出目标实体。目标实体定义如下：\n{entity_definition}\n\n请注意，目标实体可能不存在于商品名称中。',
+    '对该商品名称作命名实体识别（NER），找出目标实体。请注意，目标实体可能不存在于商品名称中。\n目标实体定义如下：\n{entity_definition}',
     '根据以上信息，重新输出商品名称，并将每个目标实体用 @@ 在开头、## 在结尾标记。\n请只输出商品名称，不要包含任何其他信息。',
 ]
 
