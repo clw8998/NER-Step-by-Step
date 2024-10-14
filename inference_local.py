@@ -1,9 +1,29 @@
-# Importing necessary libraries
 import os
 import pandas as pd
-from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
+import random
+import numpy as np
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from opencc import OpenCC
+
+# Set a global seed for reproducibility
+GLOBAL_SEED = 42
+
+# Function to set all relevant seeds
+def set_global_seed(seed):
+    # Python's built-in random module
+    random.seed(seed)
+    
+    # Numpy's random module
+    np.random.seed(seed)
+    
+    # PyTorch seed
+    torch.manual_seed(seed)
+    
+    # Any other libraries that use randomness can have their seeds set here
+
+# Set global seed once at the start
+set_global_seed(GLOBAL_SEED)
 
 # Load the model and tokenizer from local files using Huggingface Transformers
 model_name = "Qwen/Qwen2.5-7B-Instruct"
@@ -31,9 +51,9 @@ def load_all_items(path: str):
     return df_all
 
 # Function to get related item names from a dataset (pseudo-sampling)
-def get_related_item_names(current_item_names: str, items: pd.DataFrame, num_sample: int = 5):
-    # Randomly sample related items
-    related_items = items.sample(num_sample)
+def get_related_item_names(current_item_names: str, items: pd.DataFrame, num_sample: int = 5, seed: int = GLOBAL_SEED):
+    # Set random seed for reproducibility in sampling
+    related_items = items.sample(num_sample, random_state=seed)
     related_item_names = related_items['product_name'].tolist()
     return related_item_names
 
@@ -41,7 +61,7 @@ def get_related_item_names(current_item_names: str, items: pd.DataFrame, num_sam
 item_names = load_all_items('random_samples_1M')
 
 # Function to create the prompt based on the current item name and context
-def get_prompt(current_item_name, item_names=item_names, num_sample=5):
+def get_prompt(current_item_name, item_names=item_names, num_sample=5, seed=GLOBAL_SEED):
     # Prompt template to pass to the model
     prompt_template = """1. 詳細瞭解以下電商網站的商品名稱，盡可能推論出此商品名稱的所有資訊。
 2. 請對下列商品名稱作命名實體辨識(NER)，找出「產品系列」實體。 “產品系列”實體定義為：商品中所有的 “產品系列”，以及商人為了特殊目的所特別額外創造出的商品名稱，不包含特殊主題或是產品類型，不含廣告詞。如 Iphone 12、ROG 3060Ti。
@@ -52,7 +72,7 @@ def get_prompt(current_item_name, item_names=item_names, num_sample=5):
 {current_item_name}"""
 
     # Add context by sampling related item names
-    context = '\n'.join(get_related_item_names(current_item_name, item_names, num_sample))
+    context = '\n'.join(get_related_item_names(current_item_name, item_names, num_sample, seed=seed))
     # Format the template with the context and current item name
     context = prompt_template.format(item_names=context, current_item_name=current_item_name)
     # Convert traditional Chinese to simplified Chinese using OpenCC
@@ -60,22 +80,24 @@ def get_prompt(current_item_name, item_names=item_names, num_sample=5):
     return context_s
 
 # Function to generate the response from the locally loaded model
-def generate_response(current_item_name, model, tokenizer, num_sample=5):
+def generate_response(current_item_name, model, tokenizer, num_sample=5, seed=GLOBAL_SEED):
+    # Set the global seed for reproducibility in the model generation process
+    set_global_seed(seed)
+    
     # Get the prompt
-    prompt = get_prompt(current_item_name, num_sample=num_sample)
+    prompt = get_prompt(current_item_name, num_sample=num_sample, seed=seed)
     print('----- Prompt -----')
     print(prompt)
 
     # Tokenize the prompt
     messages = [
-        {"role": "system", "content": "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."},
         {"role": "user", "content": prompt}
     ]
     text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
 
-    # Generate the output
-    generated_ids = model.generate(**model_inputs, max_new_tokens=512)
+    # Generate the output with temperature set to 0 (deterministic output)
+    generated_ids = model.generate(**model_inputs, max_new_tokens=512, do_sample=False, temperature=0.0)
     generated_ids = [
         output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
     ]
@@ -85,8 +107,10 @@ def generate_response(current_item_name, model, tokenizer, num_sample=5):
     return response
 
 # Iterate through sampled item names and generate responses
-for item_name in item_names['product_name'].sample(10):
-    response = generate_response(item_name, model, tokenizer, num_sample=20)
+set_global_seed(GLOBAL_SEED)  # Set the global seed for reproducibility
+
+for item_name in item_names['product_name'].sample(10, random_state=GLOBAL_SEED):
+    response = generate_response(item_name, model, tokenizer, num_sample=20, seed=GLOBAL_SEED)
     
     # Print the output response
     print('----- Output -----')
