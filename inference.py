@@ -120,7 +120,7 @@ prompts_t = [
 
 # Use one item from items_dataset as example
 # item = items_dataset['product_name'][0]
-item = '【御宅殿】25年5月預購 ANIPLEX 敗北女角太多了! 八奈見杏菜 PVC'
+item = '【御宅殿】25年3月預購 萬代 景品 火影忍者 Memorable Saga 宇智波佐助Ⅱ 咒印 1017'
 
 #%%
 # Build corpus (VERY IMPORTANT FOR THE ZERO-SHOT)
