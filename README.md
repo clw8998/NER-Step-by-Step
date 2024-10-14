@@ -2,6 +2,12 @@
 
 PLEASE NOTE THAT ALL OF THE FOLLOWING EXPERIMENTS ARE EVEN RUN ON A **4BIT** QUANTIZED **7B** MODEL.
 
+TODO:
+- [ ] Implement a product-based RAG: BERT + product dataset (e.g. Coupang, Ruten, PChome, etc.)
+- [ ] Implement a knowledge-based RAG: BERT + in-domain corpus (e.g. Wikipedia, 萬物皆可萌, etc.)
+- [ ] Optimize prompt templates. Minimalize the number of tokens.
+- [ ] Try pydantic to enforce output schema. (e.g. json)
+
 ## Samples
 
 Each following samples include whole conversation, feel free to jump to the last part to see the final output. (output after `---------- Response 2 ----------`)
