@@ -3,7 +3,9 @@
 PLEASE NOTE THAT ALL OF THE FOLLOWING EXPERIMENTS ARE EVEN RUN ON A **4BIT** QUANTIZED **7B** MODEL.
 
 **Sample 1: *【御宅殿】25年5月預購 ANIPLEX 敗北女角太多了! 八奈見杏菜 PVC***
+
 Basic example. This is the case where RAG (simulated) **successfully retrieves highly relevant information** from the given product name.
+
 ```
 ========== Start Conversation ==========
 ---------- System Message ----------
