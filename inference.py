@@ -110,31 +110,35 @@ def run_instructions(model: AutoModelForCausalLM, tokenizer: AutoTokenizer,
 def main():
     args = parse_args()
 
-    # Conditionally define BitsAndBytesConfig based on dtype
-    if args.dtype == 'int8':
-        bnb_config = BitsAndBytesConfig(
-            load_in_8bit=True,          
-            llm_int8_threshold=6.0,     
-            llm_int8_enable_fp32_cpu_offload=True  
-        )
-    elif args.dtype == 'int4':
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,  
-            bnb_4bit_use_double_quant=True,  
-            bnb_4bit_quant_type="nf4",  
-            bnb_4bit_compute_dtype=torch.float16 
+    # If use_qwen_api is set to True, skip model and tokenizer loading
+    if not args.use_qwen_api:
+        # Conditionally define BitsAndBytesConfig based on dtype
+        if args.dtype == 'int8':
+            bnb_config = BitsAndBytesConfig(
+                load_in_8bit=True,          
+                llm_int8_threshold=6.0,     
+                llm_int8_enable_fp32_cpu_offload=True  
+            )
+        elif args.dtype == 'int4':
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,  
+                bnb_4bit_use_double_quant=True,  
+                bnb_4bit_quant_type="nf4",  
+                bnb_4bit_compute_dtype=torch.float16 
+            )
+
+        # Load the model with the BitsAndBytes configuration
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_name,
+            quantization_config=bnb_config,  
+            device_map="auto",               
+            torch_dtype=torch.float16        
         )
 
-    # Load the model with the BitsAndBytes configuration
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_name,
-        quantization_config=bnb_config,  
-        device_map="auto",               
-        torch_dtype=torch.float16        
-    )
-
-    # Load the tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+        # Load the tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+    else:
+        model, tokenizer = None, None  # Set these to None if using API
 
     # Load items dataset
     items_dataset = load_items('random_samples_1M')
@@ -151,23 +155,7 @@ def main():
         p_names = p_names[:args.num_inference]
 
     annotation_rules = {
-        # "品牌": "商品品牌名稱，如 華碩、LG",
-        "品牌": '商品品牌名称，指具体标识商品或服务来源的品牌或厂牌名称，如华硕、LG、Apple、Sony 等，涵盖科技产品、家电、服装、汽车等各行业的品牌名称。不包括电商平台中的店铺名称、卖场名称或个人卖家名称。',
-        "系列名稱": "產品中所有的「產品系列」，以及商人為了特殊目的所特別額外創造出的商品名稱，使用者可能會利用該名稱搜尋商品，不包含特殊主題或是產品類型，不含廣告詞。如 Iphone 12、ROG 3060Ti",
-        "產品類型": "實際產品名稱",
-        "產品序號": "產品序號，該產品所擁有的唯一英數符號組合序號，不含系列名。",
-        "顏色": "顏色資訊，包含化妝品以及明亮。如 花朵紅、藍色系、晶亮",
-        "材質": "產品的製造材料，一般情況下不能食用，較接近原物料，不是產品成分，請注意，「紙」尿褲的材質是棉，不是紙。",
-        "對象與族群": "人與動物的族群。如 新生兒、寵物鳥、高齡族群",
-        "適用物體、事件與場所": "適用的物品、事件、場所。如 手部用、騎車用、廚房用",
-        "特殊主題": "該物品富含特殊人為創造作，人物，並且該創作者有一定知名度。如 航海王、J.K. Rowling",
-        "形狀": "商品形狀，囊括簡單的幾何形，以及明確從名稱中可以知道該商品屬於該形狀的詞，包含衣服版型。如 圓形、鈕扣形、可愛熊造型",
-        "圖案": "商品上的圖案，囊括簡單的幾個圖形，以及明確從名稱中可以知道該商品屬於該圖案的詞",
-        "尺寸": "商品大小，常以數字與單位或特殊規格形式出現。如 120x80x10cm (長寬高)、XL、ATX（主機板）",
-        "重量": "商品重量，常以數字與單位或特殊規格形式出現。如 10g、極輕",
-        "容量": "商品容量，常以數字與單位或特殊規格形式出現。如 128G (電腦)、大容量",
-        "包裝組合": "產品包裝方式、包裝分層以及配品，如 10入、10g/包、鍵盤滑鼠墊組合、送電池",
-        "功能與規格": "產品的功用，與其特殊規格，以及產品額外的特性。如 USB3.0、防曬、太陽能"
+        # Add annotation rules here...
     }
 
     system_message_t = "你是一位熟悉電子商務的助手，以下是供你參考的語料庫：\n{corpus}"
@@ -186,9 +174,12 @@ def main():
             if not args.save_results or os.path.exists(f'{args.result_dir}/{i}_{tag}.pkl'):
                 continue
             prompts = [prompt.format(item=p_name, entity_definition=definition) for prompt in prompts_t]
-            messages = run_instructions(model, tokenizer, 
-                                        prompts, system_message, args.temerature,
-                                        test_mode=args.test_mode, use_qwen_api=args.use_qwen_api)
+
+            # Call the inference function, passing None if using API
+            messages = run_instructions(
+                model, tokenizer, prompts, system_message, args.temerature,
+                test_mode=args.test_mode, use_qwen_api=args.use_qwen_api
+            )
 
             # Save messages only if save_results is True
             if args.save_results:
