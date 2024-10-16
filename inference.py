@@ -7,6 +7,10 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from utils import get_topk_items
 from opencc import OpenCC
 import pickle
+import random
+
+import warnings
+warnings.filterwarnings("ignore")
 
 t2s = OpenCC('t2s')
 s2t = OpenCC('s2t')
@@ -19,13 +23,14 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Run inference with various configurations")
     parser.add_argument('--model_name', type=str, default="Qwen/Qwen2.5-7B-Instruct", help="Name of the model")
     parser.add_argument('--top_k', type=int, default=10, help="Top K related items to retrieve")
-    parser.add_argument('--test_mode', type=bool, default=True, help="Whether to run in test mode or not")
+    parser.add_argument('--test_mode', action='store_true', help="Whether to run in test mode or not")
     parser.add_argument('--result_dir', type=str, default="./results", help="Directory to save results")
     parser.add_argument('--inference_file', type=str, default='./data/test.pickle', help="Input file for inference")
     parser.add_argument('--dtype', type=str, default='int8', choices=['int8', 'int4'], help="Data type for model precision (int8 or int4)")
-    parser.add_argument('--save_results', type=bool, default=True, help="Whether to save inference results")
+    parser.add_argument('--save_results', action='store_true', help="Whether to save inference results")
     parser.add_argument('--num_inference', type=int, default=-1, help="Number of items to infer, -1 means all")
     parser.add_argument('--use_tag', type=str, nargs='*', default=[], help="Tags to use during inference")
+    parser.add_argument('--temerature', type=float, default=1e-5, help="Temperature for generation")
 
     return parser.parse_args()
 
@@ -43,23 +48,27 @@ def get_related_items(current_item_names: str, items_dataset: pd.DataFrame, top_
 
 # Declare multi-prompts inference function
 def run_instructions(model: AutoModelForCausalLM, tokenizer: AutoTokenizer, 
-                     prompts: list[str], system_message: str = None, test_mode: bool = True):
+                     prompts: list[str], system_message: str = None, temperature: float = 1e-5,
+                     test_mode: bool = True):
     messages = []
     print('========== Start Conversation ==========')
     if system_message:
+        print('---------- System Message ----------')
         system_message = t2s.convert(system_message)
         messages.append({"role": "system", "content": system_message})
         print(system_message)
     
     for i in range(len(prompts)):
+        print(f'---------- Instruction {i} ----------')
         prompts[i] = t2s.convert(prompts[i])
         messages.append({"role": "user", "content": prompts[i]})
         print(prompts[i])
 
+        print(f'---------- Response {i} ----------')
         if not test_mode:
             text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
-            generated_ids = model.generate(**model_inputs, max_new_tokens=512)
+            generated_ids = model.generate(**model_inputs, max_new_tokens=512, temperature=temperature)
             generated_ids = [
                 output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
             ]
@@ -109,6 +118,7 @@ def main():
         pc_test_data = pickle.load(file)
 
     p_names = [item['context'] for item in pc_test_data]
+    random.shuffle(p_names)
 
     # Control number of inference items
     if args.num_inference != -1:
@@ -149,7 +159,9 @@ def main():
             if not args.save_results or os.path.exists(f'{args.result_dir}/{i}_{tag}.pkl'):
                 continue
             prompts = [prompt.format(item=p_name, entity_definition=definition) for prompt in prompts_t]
-            messages = run_instructions(model, tokenizer, prompts, system_message, test_mode=args.test_mode)
+            messages = run_instructions(model, tokenizer, 
+                                        prompts, system_message, args.temerature,
+                                        test_mode=args.test_mode)
 
             # Save messages only if save_results is True
             if args.save_results:
