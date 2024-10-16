@@ -110,6 +110,7 @@ def run_instructions(model: AutoModelForCausalLM, tokenizer: AutoTokenizer,
 # Main function for inference
 def main():
     args = parse_args()
+    print(args)
 
     # If use_qwen_api is set to True, skip model and tokenizer loading
     if not args.use_qwen_api:
@@ -149,8 +150,6 @@ def main():
         pc_test_data = pickle.load(file)
 
     p_names = [item['context'] for item in pc_test_data]
-    random.shuffle(p_names)
-
     # Control number of inference items
     if args.num_inference != -1:
         p_names = p_names[:args.num_inference]
