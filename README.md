@@ -28,7 +28,12 @@ python inference.py [--model_name MODEL_NAME] [--top_k TOP_K] [--test_mode] [--r
 | `--use_tag`      | Tags to use during inference.                                 | `[]`                           |
 | `--temperature`  | Temperature for generation.                                   | `1e-5`                         |
 
-Run NER inference:
+Run NER Step-by-Step in interactive mode: 
+```bash
+python inference.py --model_name "Qwen/Qwen2.5-7B-Instruct" --top_k 10 --result_dir ./results --inference_file ./data/test.pickle --dtype int4 --num_inference -1 --use_tag "品牌" -i
+```
+
+Run NER Step-by-Step with the `random_samples_1M` dataset as input: 
 ```bash
 python inference.py --model_name "Qwen/Qwen2.5-7B-Instruct" --top_k 10 --result_dir ./results --inference_file ./data/test.pickle --dtype int4 --save_results --num_inference -1 --use_tag "品牌"
 ```
