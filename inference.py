@@ -30,9 +30,10 @@ def parse_args():
     parser.add_argument('--dtype', type=str, default='int8', choices=['int8', 'int4'], help="Data type for model precision (int8 or int4)")
     parser.add_argument('--save_results', action='store_true', help="Whether to save inference results")
     parser.add_argument('--num_inference', type=int, default=-1, help="Number of items to infer, -1 means all")
-    parser.add_argument('--use_tag', type=str, nargs='*', default=[], help="Tags to use during inference")
+    parser.add_argument('--use_tag', type=str, nargs='*', default=[], help="Tags to use during inference.")
     parser.add_argument('--temerature', type=float, default=1e-5, help="Temperature for generation")
     parser.add_argument('--use_qwen_api', type=bool, default=False, help="Whether to use Qwen API for inference")
+    parser.add_argument('-i', '--interactive', action='store_true', help="Run in interactive mode")
 
     return parser.parse_args()
 
@@ -53,7 +54,7 @@ def run_instructions(model: AutoModelForCausalLM, tokenizer: AutoTokenizer,
                      prompts: list[str], system_message: str = None, temperature: float = 1e-5,
                      test_mode: bool = True, use_qwen_api: bool = False):
     messages = []
-    print('========== Start Conversation ==========')
+    print('\n\n========== Start Conversation ==========')
     if system_message:
         print('---------- System Message ----------')
         system_message = t2s.convert(system_message)
@@ -155,37 +156,55 @@ def main():
         p_names = p_names[:args.num_inference]
 
     annotation_rules = {
-        # Add annotation rules here...
+        "品牌": '商品品牌名称，指具体标识商品或服务来源的品牌或厂牌名称，如华硕、LG、Apple、Sony 等，涵盖科技产品、家电、服装、汽车等各行业的品牌名称。不包括电商平台中的店铺名称、卖场名称或个人卖家名称。',
+        "系列": '商品中的所有产品系列，以及商家为特殊目的特别额外创造的商品名称，不包括特殊主题或产品类型，不含广告词。例如 iPhone 12、ROG 3060Ti。',
+        "IP": '与特定知名IP（如漫画、电影、文学作品）或其创作者相关的产品或创作。例子包括知名作品（如《海贼王》）或直接与创作者本人（如J.K. Rowling）相关的内容。此定义不包括公司、发行商或经纪公司等机构。',
+        "类型": '具体产品名称（产品类型）。例如：电脑、滑鼠、键盘、萤幕、玩具、饼干、卫生纸等实体产品。',
+        # ... Add more tags here
     }
 
     system_message_t = "你是一位熟悉電子商務的助手，以下是供你參考的語料庫：\n{corpus}"
     prompts_t = [
         '详细了解以下商品名称，尽可能辨认出你认识的所有关键词，并解释。\n{item}',
-        '对该商品名称作命名实体识别（NER），找出目标实体。请注意，目标实体可能不存在于商品名称中。\n目标实体定义如下：\n{entity_definition}',
-        '根据以上信息，输出格式化的命名实体识别结果。\n请只输出命名实体识别结果，不要包含任何其他信息。\n以下範例：\n@@樂高## Art 31213 蒙娜麗莎\n20公升電子式微波爐 @@Whirlpool## AKM2064ES\n@@MUJI## 橡木組合收納櫃/抽屜/4段寬37*深28*高37 cm @@無印良品##\nLED壁掛式緊急照明燈 高亮度 台灣製造',
+        '对该商品名称作命名实体识别（NER），找出目标实体。请注意，目标实体可能不存在于商品名称中。\n目标实体定义如下：\n{entity_definition}\n\n請簡短回答。',
+        '根据以上信息，输出格式化的命名实体识别结果。\n请只输出命名实体识别结果，不要包含任何其他信息。\n以下範例：\n@@樂高## Art 31213 蒙娜麗莎\n20公升電子式微波爐 @@Whirlpool## AKM2064ES\n@@MUJI## 橡木組合收納櫃/抽屜/4段寬37*深28*高37 cm @@無印良品##\n@@AMANDA##@@艾曼达## 泳装 连身三角-黑魅-17101附帽\nLED壁掛式緊急照明燈 高亮度 台灣製造',
     ]
 
-    for i, p_name in enumerate(p_names):
-        corpus = '\n'.join(get_related_items(p_name, items_dataset, top_k=args.top_k))
-        system_message = system_message_t.format(corpus=corpus)
-        for tag, definition in annotation_rules.items():
-            if tag not in args.use_tag:
-                continue
-            if not args.save_results or os.path.exists(f'{args.result_dir}/{i}_{tag}.pkl'):
-                continue
-            prompts = [prompt.format(item=p_name, entity_definition=definition) for prompt in prompts_t]
+    if args.interactive:
+        while True:
+            p_name = input("Enter product name: ")
+            corpus = '\n'.join(get_related_items(p_name, items_dataset, top_k=args.top_k))
+            system_message = system_message_t.format(corpus=corpus)
+            for tag, definition in annotation_rules.items():
+                if tag not in args.use_tag:
+                    continue
+                prompts = [prompt.format(item=p_name, entity_definition=definition) for prompt in prompts_t]
+                messages = run_instructions(
+                    model, tokenizer, prompts, system_message, args.temerature,
+                    test_mode=args.test_mode, use_qwen_api=args.use_qwen_api
+                )
+    else:
+        for i, p_name in enumerate(p_names):
+            corpus = '\n'.join(get_related_items(p_name, items_dataset, top_k=args.top_k))
+            system_message = system_message_t.format(corpus=corpus)
+            for tag, definition in annotation_rules.items():
+                if tag not in args.use_tag:
+                    continue
+                # if not args.save_results or os.path.exists(f'{args.result_dir}/{i}_{tag}.pkl'):
+                #     continue
+                prompts = [prompt.format(item=p_name, entity_definition=definition) for prompt in prompts_t]
 
-            # Call the inference function, passing None if using API
-            messages = run_instructions(
-                model, tokenizer, prompts, system_message, args.temerature,
-                test_mode=args.test_mode, use_qwen_api=args.use_qwen_api
-            )
+                # Call the inference function, passing None if using API
+                messages = run_instructions(
+                    model, tokenizer, prompts, system_message, args.temerature,
+                    test_mode=args.test_mode, use_qwen_api=args.use_qwen_api
+                )
 
-            # Save messages only if save_results is True
-            if args.save_results:
-                os.makedirs(args.result_dir, exist_ok=True)
-                with open(f'{args.result_dir}/{i}_{tag}.pkl', 'wb') as file:
-                    pickle.dump(messages, file)
+                # Save messages only if save_results is True
+                if args.save_results:
+                    os.makedirs(args.result_dir, exist_ok=True)
+                    with open(f'{args.result_dir}/{i}_{tag}.pkl', 'wb') as file:
+                        pickle.dump(messages, file)
 
 if __name__ == "__main__":
     main()
