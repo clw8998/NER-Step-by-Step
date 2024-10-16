@@ -31,6 +31,7 @@ def parse_args():
     parser.add_argument('--num_inference', type=int, default=-1, help="Number of items to infer, -1 means all")
     parser.add_argument('--use_tag', type=str, nargs='*', default=[], help="Tags to use during inference")
     parser.add_argument('--temerature', type=float, default=1e-5, help="Temperature for generation")
+    parser.add_argument('--use_qwen_api', type=bool, default=False, help="Whether to use Qwen API for inference")
 
     return parser.parse_args()
 
@@ -49,7 +50,7 @@ def get_related_items(current_item_names: str, items_dataset: pd.DataFrame, top_
 # Declare multi-prompts inference function
 def run_instructions(model: AutoModelForCausalLM, tokenizer: AutoTokenizer, 
                      prompts: list[str], system_message: str = None, temperature: float = 1e-5,
-                     test_mode: bool = True):
+                     test_mode: bool = True, use_qwen_api: bool = False):
     messages = []
     print('========== Start Conversation ==========')
     if system_message:
@@ -57,6 +58,30 @@ def run_instructions(model: AutoModelForCausalLM, tokenizer: AutoTokenizer,
         system_message = t2s.convert(system_message)
         messages.append({"role": "system", "content": system_message})
         print(system_message)
+    
+    if use_qwen_api:
+        history = []
+        client = Client("Qwen/Qwen2.5")
+
+        for i in range(len(prompts)):
+            prompts[i] = t2s.convert(prompts[i])
+            print(prompts[i])
+
+            if not test_mode:
+                response = client.predict(
+                    query=prompts[i],
+                    history=history,
+                    system=system_message,
+                    radio='72B',
+                    api_name="/model_chat_1"
+                )
+                history = response[1]
+            else:
+                response = "This is a placeholder response."
+            
+            print(response[1])
+        print('========== End Conversation ==========')
+        return response[1]
     
     for i in range(len(prompts)):
         print(f'---------- Instruction {i} ----------')
@@ -162,7 +187,7 @@ def main():
             prompts = [prompt.format(item=p_name, entity_definition=definition) for prompt in prompts_t]
             messages = run_instructions(model, tokenizer, 
                                         prompts, system_message, args.temerature,
-                                        test_mode=args.test_mode)
+                                        test_mode=args.test_mode, use_qwen_api=args.use_qwen_api)
 
             # Save messages only if save_results is True
             if args.save_results:
