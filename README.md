@@ -3,6 +3,7 @@
 PLEASE NOTE THAT ALL OF THE FOLLOWING EXPERIMENTS ARE EVEN RUN ON A **4BIT** QUANTIZED **7B** MODEL.
 
 TODO:
+- [ ] Consider adjust the output format or prompt for third response. Currently, it is somehow so unstable :(
 - [ ] Implement a product-based RAG: BERT + product dataset (e.g. Coupang, Ruten, PChome, etc.)
 - [ ] Implement a knowledge-based RAG: BERT + in-domain corpus (e.g. Wikipedia, 萬物皆可萌, etc.)
 - [ ] Optimize prompt templates. Minimalize the number of tokens.
