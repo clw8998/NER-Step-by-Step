@@ -149,8 +149,6 @@ def main():
         pc_test_data = pickle.load(file)
 
     p_names = [item['context'] for item in pc_test_data]
-    random.shuffle(p_names)
-
     # Control number of inference items
     if args.num_inference != -1:
         p_names = p_names[:args.num_inference]
