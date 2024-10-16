@@ -8,6 +8,7 @@ from utils import get_topk_items
 from opencc import OpenCC
 import pickle
 import random
+from gradio_client import Client
 
 import warnings
 warnings.filterwarnings("ignore")
