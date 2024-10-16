@@ -1,0 +1,11 @@
+pandas
+opencc
+transformers
+gradio_client
+tqdm
+numpy
+jieba
+scikit-learn
+huggingface_hub
+bitsandbytes
+accelerate
