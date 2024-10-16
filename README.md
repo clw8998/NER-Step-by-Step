@@ -3,10 +3,40 @@
 PLEASE NOTE THAT ALL OF THE FOLLOWING EXPERIMENTS ARE EVEN RUN ON A **4BIT** QUANTIZED **7B** MODEL.
 
 TODO:
+- [ ] Consider adjust the output format or prompt for third response. Currently, it is somehow so unstable :(
 - [ ] Implement a product-based RAG: BERT + product dataset (e.g. Coupang, Ruten, PChome, etc.)
 - [ ] Implement a knowledge-based RAG: BERT + in-domain corpus (e.g. Wikipedia, 萬物皆可萌, etc.)
 - [ ] Optimize prompt templates. Minimalize the number of tokens.
 - [ ] Try pydantic to enforce output schema. (e.g. json)
+
+## Quick Start
+
+```bash
+python inference.py [--model_name MODEL_NAME] [--top_k TOP_K] [--test_mode] [--result_dir RESULT_DIR] [--inference_file INFERENCE_FILE] [--dtype {int8,int4}] [--save_results] [--num_inference NUM_INFERENCE] [--use_tag [USE_TAG [USE_TAG ...]]] [--temperature TEMPERATURE]
+```
+
+| Argument         | Description                                                   | Default                        |
+|------------------|---------------------------------------------------------------|--------------------------------|
+| `--model_name`   | Name of the model.                                            | `Qwen/Qwen2.5-7B-Instruct`     |
+| `--top_k`        | Top K related items to retrieve.                              | `10`                           |
+| `--test_mode`    | Whether to run in test mode or not.                           | `False`                        |
+| `--result_dir`   | Directory to save results.                                    | `./results`                    |
+| `--inference_file`| Input file for inference.                                    | `./data/test.pickle`           |
+| `--dtype`        | Data type for model precision (int8 or int4).                 | `int8`                         |
+| `--save_results` | Whether to save inference results.                            | `False`                        |
+| `--num_inference`| Number of items to infer, -1 means all.                       | `-1`                           |
+| `--use_tag`      | Tags to use during inference.                                 | `[]`                           |
+| `--temperature`  | Temperature for generation.                                   | `1e-5`                         |
+
+Run NER inference:
+```bash
+python inference.py --model_name "Qwen/Qwen2.5-7B-Instruct" --top_k 10 --result_dir ./results --inference_file ./data/test.pickle --dtype int4 --save_results --num_inference -1 --use_tag "品牌"
+```
+
+Run in test mode (use `--test_mode` flag):
+```bash
+python inference.py --model_name "Qwen/Qwen2.5-7B-Instruct" --top_k 10 --result_dir ./results --inference_file ./data/test.pickle --dtype int4 --save_results True --num_inference -1 --use_tag "品牌" --test_mode
+```
 
 ## Samples
 

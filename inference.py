@@ -7,7 +7,10 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from utils import get_topk_items
 from opencc import OpenCC
 import pickle
-from gradio_client import Client
+import random
+
+import warnings
+warnings.filterwarnings("ignore")
 
 t2s = OpenCC('t2s')
 s2t = OpenCC('s2t')
@@ -20,13 +23,14 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Run inference with various configurations")
     parser.add_argument('--model_name', type=str, default="Qwen/Qwen2.5-7B-Instruct", help="Name of the model")
     parser.add_argument('--top_k', type=int, default=10, help="Top K related items to retrieve")
-    parser.add_argument('--test_mode', type=bool, default=True, help="Whether to run in test mode or not")
+    parser.add_argument('--test_mode', action='store_true', help="Whether to run in test mode or not")
     parser.add_argument('--result_dir', type=str, default="./results", help="Directory to save results")
     parser.add_argument('--inference_file', type=str, default='./data/test.pickle', help="Input file for inference")
     parser.add_argument('--dtype', type=str, default='int8', choices=['int8', 'int4'], help="Data type for model precision (int8 or int4)")
-    parser.add_argument('--save_results', type=bool, default=True, help="Whether to save inference results")
+    parser.add_argument('--save_results', action='store_true', help="Whether to save inference results")
     parser.add_argument('--num_inference', type=int, default=-1, help="Number of items to infer, -1 means all")
     parser.add_argument('--use_tag', type=str, nargs='*', default=[], help="Tags to use during inference")
+    parser.add_argument('--temerature', type=float, default=1e-5, help="Temperature for generation")
     parser.add_argument('--use_qwen_api', type=bool, default=False, help="Whether to use Qwen API for inference")
 
     return parser.parse_args()
@@ -45,10 +49,12 @@ def get_related_items(current_item_names: str, items_dataset: pd.DataFrame, top_
 
 # Declare multi-prompts inference function
 def run_instructions(model: AutoModelForCausalLM, tokenizer: AutoTokenizer, 
-                     prompts: list[str], system_message: str = None, test_mode: bool = True, use_qwen_api: bool = False):
+                     prompts: list[str], system_message: str = None, temperature: float = 1e-5,
+                     test_mode: bool = True, use_qwen_api: bool = False):
     messages = []
     print('========== Start Conversation ==========')
     if system_message:
+        print('---------- System Message ----------')
         system_message = t2s.convert(system_message)
         messages.append({"role": "system", "content": system_message})
         print(system_message)
@@ -78,14 +84,16 @@ def run_instructions(model: AutoModelForCausalLM, tokenizer: AutoTokenizer,
         return response[1]
     
     for i in range(len(prompts)):
+        print(f'---------- Instruction {i} ----------')
         prompts[i] = t2s.convert(prompts[i])
         messages.append({"role": "user", "content": prompts[i]})
         print(prompts[i])
 
+        print(f'---------- Response {i} ----------')
         if not test_mode:
             text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
-            generated_ids = model.generate(**model_inputs, max_new_tokens=512)
+            generated_ids = model.generate(**model_inputs, max_new_tokens=512, temperature=temperature)
             generated_ids = [
                 output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
             ]
@@ -135,13 +143,15 @@ def main():
         pc_test_data = pickle.load(file)
 
     p_names = [item['context'] for item in pc_test_data]
+    random.shuffle(p_names)
 
     # Control number of inference items
     if args.num_inference != -1:
         p_names = p_names[:args.num_inference]
 
     annotation_rules = {
-        "品牌": "商品品牌名稱，如 華碩、LG",
+        # "品牌": "商品品牌名稱，如 華碩、LG",
+        "品牌": '商品品牌名称，指具体标识商品或服务来源的品牌或厂牌名称，如华硕、LG、Apple、Sony 等，涵盖科技产品、家电、服装、汽车等各行业的品牌名称。不包括电商平台中的店铺名称、卖场名称或个人卖家名称。',
         "系列名稱": "產品中所有的「產品系列」，以及商人為了特殊目的所特別額外創造出的商品名稱，使用者可能會利用該名稱搜尋商品，不包含特殊主題或是產品類型，不含廣告詞。如 Iphone 12、ROG 3060Ti",
         "產品類型": "實際產品名稱",
         "產品序號": "產品序號，該產品所擁有的唯一英數符號組合序號，不含系列名。",
@@ -163,7 +173,7 @@ def main():
     prompts_t = [
         '详细了解以下商品名称，尽可能辨认出你认识的所有关键词，并解释。\n{item}',
         '对该商品名称作命名实体识别（NER），找出目标实体。请注意，目标实体可能不存在于商品名称中。\n目标实体定义如下：\n{entity_definition}',
-        '根据以上信息，重新输出商品名称，并将每个目标实体用 @@ 在开头、## 在结尾标记。\n请只输出商品名称，不要包含任何其他信息。',
+        '根据以上信息，输出格式化的命名实体识别结果。\n请只输出命名实体识别结果，不要包含任何其他信息。\n以下範例：\n@@樂高## Art 31213 蒙娜麗莎\n20公升電子式微波爐 @@Whirlpool## AKM2064ES\n@@MUJI## 橡木組合收納櫃/抽屜/4段寬37*深28*高37 cm @@無印良品##\nLED壁掛式緊急照明燈 高亮度 台灣製造',
     ]
 
     for i, p_name in enumerate(p_names):
@@ -175,7 +185,9 @@ def main():
             if not args.save_results or os.path.exists(f'{args.result_dir}/{i}_{tag}.pkl'):
                 continue
             prompts = [prompt.format(item=p_name, entity_definition=definition) for prompt in prompts_t]
-            messages = run_instructions(model, tokenizer, prompts, system_message, test_mode=args.test_mode, use_qwen_api=args.use_qwen_api)
+            messages = run_instructions(model, tokenizer, 
+                                        prompts, system_message, args.temerature,
+                                        test_mode=args.test_mode, use_qwen_api=args.use_qwen_api)
 
             # Save messages only if save_results is True
             if args.save_results:
