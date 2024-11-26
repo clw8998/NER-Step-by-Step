@@ -8,6 +8,8 @@ python inference.py \
     --dtype int8 \
     --num_inference -1 \
     --use_tag "品牌" \
-    --use_qwen_api \
+    --corpus coupang \
+    -i
+    # --use_qwen_api \
     --save_results
     # --test_mode

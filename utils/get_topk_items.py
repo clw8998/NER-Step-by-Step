@@ -1,100 +1,88 @@
-# python .\tf_idf_revised.py ../02_程式集/Coupang_Scraping-main/results -k 5 -i
-# %%
-# Import required libraries
-import time
-from tqdm import tqdm
+import os
+import pickle
 import numpy as np
 import pandas as pd
 import jieba
-import os
-import html
+from tqdm import tqdm
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-import pickle
+from datasets import load_dataset
 
+class TFIDFModel:
+    def __init__(self, corpus_name):
+        self.corpus_name = corpus_name
+        self.tokenizer = self.jieba_tokenizer  # Fixed tokenizer
+        self.model_path = f'{self.corpus_name}_tf_idf_checkpoint.pkl'
+        self.pickle_file = f'{self.corpus_name}.pkl'
+        self.items_df = None
+        self.tfidf = None
+        self.items_tfidf_matrix = None
+        self._initialized = False
 
-items_folder = 'random_samples_1M'
-pickle_file = 'random_samples_1M.pkl'
-# Path to save/load the models
-model_path = 'tf_idf_checkpoint.pkl'
+    @staticmethod
+    def jieba_tokenizer(text):
 
-timer_start = time.time()
-path_to_item_file = [file for file in os.listdir(items_folder) if file.endswith('.csv')]
-# merge all csv files into one dataframe
-items_df = pd.concat([pd.read_csv(os.path.join(items_folder, file)) for file in path_to_item_file], ignore_index=True)
+        tokens = jieba.lcut(text, cut_all=False)
+        stop_words = ['【', '】', '/', '~', '＊', '、', '（', '）', '+', '‧', ' ', '']
+        tokens = [t for t in tokens if t not in stop_words]
+        return tokens
 
-# Ensure all product_name entries are strings
-items_df['product_name'] = items_df['product_name'].astype(str)
-items_df['product_name'] = items_df['product_name'].map(html.unescape)
-items_df['product_name'] = items_df['product_name'].fillna('')
-items_df = items_df.drop_duplicates(subset='product_name')
+    def _load_data(self):
 
-print(f'Processed {len(items_df)} items in {time.time() - timer_start:.2f} seconds.')
+        if os.path.exists(self.pickle_file):
+            with open(self.pickle_file, 'rb') as f:
+                self.items_df = pickle.load(f)
+            print(f'Data loaded from {self.pickle_file}.')
+        else:
+            # If the pickle file does not exist, read the corresponding CSV file
+            dataset = load_dataset("clw8998/NER-step-by-step-dataset", data_files={"coupang": "coupang.csv", "pchome": "pchome.csv"})
 
-# 保存為 pickle 檔案
-with open(pickle_file, 'wb') as f:
-    pickle.dump(items_df, f)
-print(f'Data saved to {pickle_file}.')
+            self.items_df = dataset[self.corpus_name].to_pandas()
+            # Data cleaning
+            self.items_df['product_name'] = self.items_df['product_name'].astype(str)
+            self.items_df['product_name'] = self.items_df['product_name'].fillna('')
+            self.items_df = self.items_df.drop_duplicates(subset='product_name')
+            # Save as a pickle file
+            with open(self.pickle_file, 'wb') as f:
+                pickle.dump(self.items_df, f)
+            print(f'Data processed and saved to {self.pickle_file}.')
+        
+    def _init_tf_idf(self):
 
+        if os.path.exists(self.model_path):
+            # Load the saved model
+            with open(self.model_path, 'rb') as file:
+                data = pickle.load(file)
+                self.tfidf = data['tfidf']
+                self.items_tfidf_matrix = data['items_tfidf_matrix']
+            print(f'TF-IDF model loaded from {self.model_path}.')
+        else:
+            # Train a new model if no saved model is found
+            print(f'TF-IDF model for {self.corpus_name} not found. Creating a new model...')
+            self.tfidf = TfidfVectorizer(token_pattern=None, tokenizer=self.tokenizer, ngram_range=(1, 2))
+            self.items_tfidf_matrix = self.tfidf.fit_transform(tqdm(self.items_df['product_name']))
+            # Save the trained model
+            with open(self.model_path, 'wb') as file:
+                pickle.dump({
+                    'tfidf': self.tfidf,
+                    'items_tfidf_matrix': self.items_tfidf_matrix,
+                }, file)
+            print(f'TF-IDF model saved to {self.model_path}.')
 
-# %%
-# Initialize tokenizer
-timer_start = time.time()
+    def initialize(self):
 
+        if not self._initialized:
+            self._load_data()
+            self._init_tf_idf()
+            self._initialized = True
 
-def jieba_tokenizer(text):
-    tokens = jieba.lcut(text, cut_all=False)
-    stop_words = ['【','】','/','~','＊','、','（','）','+','‧',' ','']
-    tokens = [t for t in tokens if t not in stop_words]
-    return tokens
+    def query(self, query_str, top_k=5):
 
-tokenizer = jieba_tokenizer
-
-
-
-# Function to save the models
-def save_models_and_matrices(tfidf, items_tfidf_matrix, path):
-    with open(path, 'wb') as file:
-        pickle.dump({
-            'tfidf': tfidf,
-            'items_tfidf_matrix': items_tfidf_matrix,
-        }, file)
-
-# Function to load the models
-def load_models_and_matrices(path):
-    with open(path, 'rb') as file:
-        data = pickle.load(file)
-    return data['tfidf'], data['items_tfidf_matrix']
-
-
-# Check if the models are already saveda
-if os.path.exists(model_path):
-    # If saved, load the models
-    tfidf, items_tfidf_matrix = load_models_and_matrices(model_path)
-else:
-    # If not saved, create the models
-    print('TF-IDF models not found. Creating them...')
-
-    tfidf = TfidfVectorizer(token_pattern=None, tokenizer=tokenizer, ngram_range=(1,2))
-    items_tfidf_matrix = tfidf.fit_transform(tqdm(items_df['product_name']))
-    
-    save_models_and_matrices(tfidf, items_tfidf_matrix, model_path)
-
-print(f'TF-IDF models loaded in {time.time() - timer_start:.2f} seconds.')
-
-
-# %%
-
-# Function to search for the top k items
-def tf_idf(query, top_k=10):
-    query_tfidf = tfidf.transform([query]) # sparse array
-    scores = cosine_similarity(query_tfidf, items_tfidf_matrix)
-    top_k_indices = np.argsort(-scores[0])[:top_k]
-    
-    top_k_names = items_df['product_name'].values[top_k_indices]
-    top_k_scores = scores[0][top_k_indices]
-
-    return top_k_names, top_k_scores
-
-
-
+        if not self._initialized:
+            self.initialize()
+        query_tfidf = self.tfidf.transform([query_str])
+        scores = cosine_similarity(query_tfidf, self.items_tfidf_matrix)
+        top_k_indices = np.argsort(-scores[0])[:top_k]
+        top_k_names = self.items_df['product_name'].values[top_k_indices]
+        top_k_scores = scores[0][top_k_indices]
+        return top_k_names

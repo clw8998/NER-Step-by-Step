@@ -34,19 +34,13 @@ def parse_args():
     parser.add_argument('--temerature', type=float, default=1e-5, help="Temperature for generation")
     parser.add_argument('--use_qwen_api', type=bool, default=False, help="Whether to use Qwen API for inference")
     parser.add_argument('-i', '--interactive', action='store_true', help="Run in interactive mode")
+    parser.add_argument('--corpus', type=str, default='coupang', choices=['coupang', 'pchome'], help="Corpus to use for inference")
 
     return parser.parse_args()
 
-# Load items dataset
-def load_items(path: str):
-    file_names = [f for f in os.listdir(path) if f.endswith('.csv')]
-    df_list = [pd.read_csv(os.path.join(path, file_name)) for file_name in file_names]
-    df_all = pd.concat(df_list, ignore_index=True)
-    return df_all
-
 # Declare retrieval function
-def get_related_items(current_item_names: str, items_dataset: pd.DataFrame, top_k: int = 5):
-    related_items, _ = get_topk_items.tf_idf(current_item_names, top_k=top_k)
+def get_related_items(current_item_names: str, corpus_name: str,  top_k: int = 5):
+    related_items, _ = get_topk_items.tf_idf(current_item_names, corpus_name, top_k=top_k)
     return related_items
 
 # Declare multi-prompts inference function
@@ -143,7 +137,8 @@ def main():
         model, tokenizer = None, None  # Set these to None if using API
 
     # Load items dataset
-    items_dataset = load_items('random_samples_1M')
+    tfidf_model = get_topk_items.TFIDFModel(args.corpus)
+    tfidf_model.initialize()
 
     # Load inference data
     with open(args.inference_file, 'rb') as file:
@@ -155,24 +150,40 @@ def main():
         p_names = p_names[:args.num_inference]
 
     annotation_rules = {
-        "品牌": '商品品牌名称，指具体标识商品或服务来源的品牌或厂牌名称，如华硕、LG、Apple、Sony 等，涵盖科技产品、家电、服装、汽车等各行业的品牌名称。不包括电商平台中的店铺名称、卖场名称或个人卖家名称。',
-        "系列": '商品中的所有产品系列，以及商家为特殊目的特别额外创造的商品名称，不包括特殊主题或产品类型，不含广告词。例如 iPhone 12、ROG 3060Ti。',
-        "IP": '与特定知名IP（如漫画、电影、文学作品）或其创作者相关的产品或创作。例子包括知名作品（如《海贼王》）或直接与创作者本人（如J.K. Rowling）相关的内容。此定义不包括公司、发行商或经纪公司等机构。',
-        "类型": '具体产品名称（产品类型）。例如：电脑、滑鼠、键盘、萤幕、玩具、饼干、卫生纸等实体产品。',
-        # ... Add more tags here
+        "品牌": '商品的品牌，可能包含中文、英文但不包括电商平台中的店铺名称、卖场名称或个人卖家名称。',
+        "系列名稱": "產品中所有的「產品系列」，以及商人為了特殊目的所特別額外創造出的商品名稱，使用者可能會利用該名稱搜尋商品，不包含特殊主題或是產品類型，不含廣告詞。如 Iphone 12、ROG 3060Ti",
+        "產品類型": "實際產品名稱",
+        "產品序號": "產品序號，該產品所擁有的唯一英數符號組合序號，不含系列名。",
+        "顏色": "顏色資訊，包含化妝品以及明亮。如 花朵紅、藍色系、晶亮",
+        "材質": "產品的製造材料，一般情況下不能食用，較接近原物料，不是產品成分，請注意，「紙」尿褲的材質是棉，不是紙。",
+        "對象與族群": "人與動物的族群。如 新生兒、寵物鳥、高齡族群",
+        "適用物體、事件與場所": "適用的物品、事件、場所。如 手部用、騎車用、廚房用",
+        "特殊主題": "該物品富含特殊人為創造作，人物，並且該創作者有一定知名度。如 航海王、J.K. Rowling",
+        "形狀": "商品形狀，囊括簡單的幾何形，以及明確從名稱中可以知道該商品屬於該形狀的詞，包含衣服版型。如 圓形、鈕扣形、可愛熊造型",
+        "圖案": "商品上的圖案，囊括簡單的幾個圖形，以及明確從名稱中可以知道該商品屬於該圖案的詞",
+        "尺寸": "商品大小，常以數字與單位或特殊規格形式出現。如 120x80x10cm (長寬高)、XL、ATX（主機板）",
+        "重量": "商品重量，常以數字與單位或特殊規格形式出現。如 10g、極輕",
+        "容量": "商品容量，常以數字與單位或特殊規格形式出現。如 128G (電腦)、大容量",
+        "包裝組合": "產品包裝方式、包裝分層以及配品，如 10入、10g/包、鍵盤滑鼠墊組合、送電池",
+        "功能與規格": "產品的功用，與其特殊規格，以及產品額外的特性。如 USB3.0、防曬、太陽能"
     }
 
     system_message_t = "你是一位熟悉電子商務的助手，以下是供你參考的語料庫：\n{corpus}"
     prompts_t = [
-        '详细了解以下商品名称，尽可能辨认出你认识的所有关键词，并解释。\n{item}',
-        '对该商品名称作命名实体识别（NER），找出目标实体。请注意，目标实体可能不存在于商品名称中。\n目标实体定义如下：\n{entity_definition}\n\n請簡短回答。',
-        '根据以上信息，输出格式化的命名实体识别结果。\n请只输出命名实体识别结果，不要包含任何其他信息。\n以下範例：\n@@樂高## Art 31213 蒙娜麗莎\n20公升電子式微波爐 @@Whirlpool## AKM2064ES\n@@MUJI## 橡木組合收納櫃/抽屜/4段寬37*深28*高37 cm @@無印良品##\n@@AMANDA##@@艾曼达## 泳装 连身三角-黑魅-17101附帽\nLED壁掛式緊急照明燈 高亮度 台灣製造',
+        '详细了解以下商品，尽可能辨认出你认识的所有关键词，并解释。\n{item}',
+        '对该商品作命名实体识别（NER），找出目标实体。请注意，目标实体可能不存在于商品中。\n目标实体定义如下：\n{entity_definition}',
+        '根据以上你推论的结果，输出命名实体识别结果。\n请只输出命名实体识别结果，不要包含任何其他信息，若有多组实体，中间以「、」隔开。',
     ]
+
+    prompt_one_pass_t = [
+        '对该商品名称作命名实体识别（NER），找出目标实体。请注意，目标实体可能不存在于商品名称中。\n目标实体定义如下：\n{entity_definition}\n\n商品名稱如下：\n{item}',
+    ]
+
 
     if args.interactive:
         while True:
             p_name = input("Enter product name: ")
-            corpus = '\n'.join(get_related_items(p_name, items_dataset, top_k=args.top_k))
+            corpus = '\n'.join(tfidf_model.query(p_name, top_k=args.top_k))
             system_message = system_message_t.format(corpus=corpus)
             for tag, definition in annotation_rules.items():
                 if tag not in args.use_tag:
@@ -184,7 +195,7 @@ def main():
                 )
     else:
         for i, p_name in enumerate(p_names):
-            corpus = '\n'.join(get_related_items(p_name, items_dataset, top_k=args.top_k))
+            corpus = '\n'.join(tfidf_model.query(p_name, top_k=args.top_k))
             system_message = system_message_t.format(corpus=corpus)
             for tag, definition in annotation_rules.items():
                 if tag not in args.use_tag:
