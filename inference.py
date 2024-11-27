@@ -4,55 +4,53 @@ import os
 import pandas as pd
 import argparse
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from utils import get_topk_items
 from opencc import OpenCC
 import pickle
-import random
 from gradio_client import Client
 
 import warnings
 warnings.filterwarnings("ignore")
 
+# Package to access Ruten platform
+import ruten_api
+
 t2s = OpenCC('t2s')
 s2t = OpenCC('s2t')
-
-# Download the dataset if it does not exist
-import get_dataset  # This import itself will download the dataset, DO NOT REMOVE
 
 # Define argparse for handling arguments
 def parse_args():
     parser = argparse.ArgumentParser(description="Run inference with various configurations")
+
+    # Model options
     parser.add_argument('--model_name', type=str, default="Qwen/Qwen2.5-7B-Instruct", help="Name of the model")
-    parser.add_argument('--top_k', type=int, default=10, help="Top K related items to retrieve")
-    parser.add_argument('--test_mode', action='store_true', help="Whether to run in test mode or not")
-    parser.add_argument('--result_dir', type=str, default="./results", help="Directory to save results")
-    parser.add_argument('--inference_file', type=str, default='./data/test.pickle', help="Input file for inference")
     parser.add_argument('--dtype', type=str, default='int8', choices=['int8', 'int4'], help="Data type for model precision (int8 or int4)")
+    parser.add_argument('--temerature', type=float, default=1e-5, help="Temperature for generation")
+    
+    # NER options
+    parser.add_argument('--use_tag', type=str, nargs='*', default=[], help="Tags to use during inference.")
+    
+    # RAG options
+    parser.add_argument('--rag_type', type=str, default='none', choices=['none', 'tfidf', 'ruten'], help="Type of RAG model to use")
+    parser.add_argument('--top_k', type=int, default=10, help="Top K related items to retrieve")
+
+    # For batch inference
+    parser.add_argument('--inference_file', type=str, default='./data/test.pickle', help="Input file for inference")
     parser.add_argument('--save_results', action='store_true', help="Whether to save inference results")
     parser.add_argument('--num_inference', type=int, default=-1, help="Number of items to infer, -1 means all")
-    parser.add_argument('--use_tag', type=str, nargs='*', default=[], help="Tags to use during inference.")
-    parser.add_argument('--temerature', type=float, default=1e-5, help="Temperature for generation")
-    parser.add_argument('--use_qwen_api', type=bool, default=False, help="Whether to use Qwen API for inference")
+    parser.add_argument('--result_dir', type=str, default="./results", help="Directory to save results")
+
+    # Other options
+    parser.add_argument('--use_qwen_api', type=bool, default=False, help="Whether to use Qwen API for inference. Currently, it will use the 72B model.")
+    parser.add_argument('--qwen_api_radio', type=str, default='7B', help="Model size to use for Qwen API")
+    parser.add_argument('--test_mode', action='store_true', help="Whether to run in test mode or not")
     parser.add_argument('-i', '--interactive', action='store_true', help="Run in interactive mode")
 
     return parser.parse_args()
 
-# Load items dataset
-def load_items(path: str):
-    file_names = [f for f in os.listdir(path) if f.endswith('.csv')]
-    df_list = [pd.read_csv(os.path.join(path, file_name)) for file_name in file_names]
-    df_all = pd.concat(df_list, ignore_index=True)
-    return df_all
-
-# Declare retrieval function
-def get_related_items(current_item_names: str, items_dataset: pd.DataFrame, top_k: int = 5):
-    related_items, _ = get_topk_items.tf_idf(current_item_names, top_k=top_k)
-    return related_items
-
 # Declare multi-prompts inference function
 def run_instructions(model: AutoModelForCausalLM, tokenizer: AutoTokenizer, 
                      prompts: list[str], system_message: str = None, temperature: float = 1e-5,
-                     test_mode: bool = True, use_qwen_api: bool = False):
+                     test_mode: bool = True, use_qwen_api: bool = False, model_size: str = '7B'):
     messages = []
     print('\n\n========== Start Conversation ==========')
     if system_message:
@@ -66,22 +64,24 @@ def run_instructions(model: AutoModelForCausalLM, tokenizer: AutoTokenizer,
         client = Client("Qwen/Qwen2.5")
 
         for i in range(len(prompts)):
+            print(f'---------- Instruction {i} ----------')
             prompts[i] = t2s.convert(prompts[i])
             print(prompts[i])
 
+            print(f'---------- Response {i} ----------')
             if not test_mode:
                 response = client.predict(
                     query=prompts[i],
                     history=history,
                     system=system_message,
-                    radio='72B',
+                    radio=model_size,
                     api_name="/model_chat_1"
                 )
                 history = response[1]
             else:
                 response = "This is a placeholder response."
             
-            print(response[1])
+            print(response[1][i][1]['text'])
         print('========== End Conversation ==========')
         return response[1]
     
@@ -142,8 +142,27 @@ def main():
     else:
         model, tokenizer = None, None  # Set these to None if using API
 
-    # Load items dataset
-    items_dataset = load_items('random_samples_1M')
+    
+    if args.rag_type in ['tfidf']:
+        # Download the dataset if it does not exist
+        import get_dataset  # This import itself will download the dataset, DO NOT REMOVE
+
+        from utils import get_topk_items
+
+        # Load items dataset
+        def load_items(path: str):
+            file_names = [f for f in os.listdir(path) if f.endswith('.csv')]
+            df_list = [pd.read_csv(os.path.join(path, file_name)) for file_name in file_names]
+            df_all = pd.concat(df_list, ignore_index=True)
+            return df_all
+
+        # Declare retrieval function
+        def get_related_items(current_item_names: str, items_dataset: pd.DataFrame, top_k: int = 5):
+            related_items, _ = get_topk_items.tf_idf(current_item_names, top_k=top_k)
+            return related_items
+
+        # Load items dataset
+        items_dataset = load_items('./local_corpus')
 
     # Load inference data
     with open(args.inference_file, 'rb') as file:
@@ -176,6 +195,7 @@ def main():
     }
 
     system_message_t = "你是一位熟悉電子商務的助手，以下是供你參考的語料庫：\n{corpus}"
+    system_message_no_rag_t = "你是一位熟悉電子商務的助手。"
 
     prompts_t = [
         '详细了解以下商品名称，尽可能辨认出你认识的所有关键词，并解释。\n{item}',
@@ -190,19 +210,37 @@ def main():
     if args.interactive:
         while True:
             p_name = input("Enter product name: ")
-            corpus = '\n'.join(get_related_items(p_name, items_dataset, top_k=args.top_k))
-            system_message = system_message_t.format(corpus=corpus)
+
+            # RAG things
+            if args.rag_type in ['tfidf']:
+                corpus = '\n'.join(get_related_items(p_name, items_dataset, top_k=args.top_k))
+                system_message = system_message_t.format(corpus=corpus)
+            elif args.rag_type in ['ruten']:
+                corpus = ruten_api.search(query=p_name, top_k=args.top_k, verbose=True)['name'].tolist()
+                system_message = system_message_t.format(corpus=corpus)
+            else:
+                corpus = ''
+                system_message = system_message_no_rag_t
+
             for tag, definition in annotation_rules.items():
                 if tag not in args.use_tag:
                     continue
                 prompts = [prompt.format(item=p_name, entity_definition=definition) for prompt in prompts_t]
                 messages = run_instructions(
                     model, tokenizer, prompts, system_message, args.temerature,
-                    test_mode=args.test_mode, use_qwen_api=args.use_qwen_api
+                    test_mode=args.test_mode, use_qwen_api=args.use_qwen_api, model_size=args.qwen_api_radio
                 )
     else:
         for i, p_name in enumerate(p_names):
-            corpus = '\n'.join(get_related_items(p_name, items_dataset, top_k=args.top_k))
+
+            if args.rag_type in ['tfidf']:
+                corpus = '\n'.join(get_related_items(p_name, items_dataset, top_k=args.top_k))
+            elif args.rag_type in ['ruten']:
+                corpus = ruten_api.get_ruten_related_items(p_name)
+            else:
+                corpus = ''
+                system_message = system_message_no_rag_t
+
             system_message = system_message_t.format(corpus=corpus)
             for tag, definition in annotation_rules.items():
                 if tag not in args.use_tag:
@@ -214,7 +252,7 @@ def main():
                 # Call the inference function, passing None if using API
                 messages = run_instructions(
                     model, tokenizer, prompts, system_message, args.temerature,
-                    test_mode=args.test_mode, use_qwen_api=args.use_qwen_api
+                    test_mode=args.test_mode, use_qwen_api=args.use_qwen_api, model_size=args.qwen_api_radio
                 )
 
                 # Save messages only if save_results is True

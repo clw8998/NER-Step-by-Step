@@ -13,8 +13,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 import pickle
 
 
-items_folder = 'random_samples_1M'
-pickle_file = 'random_samples_1M.pkl'
+items_folder = 'local_corpus'
+pickle_file = 'local_corpus.pkl'
 # Path to save/load the models
 model_path = 'tf_idf_checkpoint.pkl'
 

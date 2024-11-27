@@ -23,7 +23,7 @@ def download_if_not_exists(repo_id, filename, folder_name):
 random_samples_1M_path = download_if_not_exists(
     repo_id="clw8998/Semantic-Search-dataset-for-EE5327701", 
     filename="random_samples_1M.zip", 
-    folder_name='./random_samples_1M'
+    folder_name='./local_corpus'
 )
 
 # Unzip random_samples_1M.zip if it was downloaded

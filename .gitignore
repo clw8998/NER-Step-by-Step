@@ -1,4 +1,4 @@
-random_samples_1M
+local_corpus/
 *.pkl
 results/
 
