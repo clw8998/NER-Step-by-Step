@@ -35,7 +35,10 @@ class TFIDFModel:
             print(f'Data loaded from {self.pickle_file}.')
         else:
             # If the pickle file does not exist, read the corresponding CSV file
-            dataset = load_dataset("clw8998/NER-step-by-step-dataset", data_files={"coupang": "coupang.csv", "pchome": "pchome.csv"})
+            dataset = load_dataset("clw8998/NER-step-by-step-dataset", 
+                                   data_files={"coupang": "coupang.csv", 
+                                               "pchome": "pchome.csv",
+                                               "pchome_train_11000": "pchome_train_11000.csv",})
 
             self.items_df = dataset[self.corpus_name].to_pandas()
             # Data cleaning
