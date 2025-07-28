@@ -1,23 +1,19 @@
 # Import libraries
 import torch
 import os
-import pandas as pd
 import argparse
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from utils import get_topk_items
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from opencc import OpenCC
 import pickle
 import random
-from gradio_client import Client
+import gc   
+
 
 import warnings
 warnings.filterwarnings("ignore")
 
 t2s = OpenCC('t2s')
 s2t = OpenCC('s2t')
-
-# Download the dataset if it does not exist
-import get_dataset  # This import itself will download the dataset, DO NOT REMOVE
 
 # Define argparse for handling arguments
 def parse_args():
@@ -37,16 +33,10 @@ def parse_args():
     parser.add_argument('--corpus', type=str, default='coupang', choices=['coupang', 'pchome', 'pchome_train_11000'], help="Corpus to use for inference")
     parser.add_argument('--rag_corpus', type=bool, default=False, help="Whether to use RAG for corpus retrieval")
     parser.add_argument('--rag_error', type=bool, default=False, help="Whether to use RAG for error cases retrieval")
-    parser.add_argument('--prompt_type', type=int, default=0, choices=[0, 1, 2], help="Prompt type to use for inference")
+    parser.add_argument('--prompt_type', type=int, default=0, choices=[0, 1, 2, 3], help="Prompt type to use for inference")
 
     return parser.parse_args()
 
-# Declare retrieval function
-def get_related_items(current_item_names: str, corpus_name: str,  top_k: int = 5):
-    related_items, _ = get_topk_items.tf_idf(current_item_names, corpus_name, top_k=top_k)
-    return related_items
-
-# Declare multi-prompts inference function
 def run_instructions(model: AutoModelForCausalLM, tokenizer: AutoTokenizer, 
                      prompts: list[str], system_message: str = None, temperature: float = 1e-5,
                      test_mode: bool = True, use_qwen_api: bool = False):
@@ -58,29 +48,6 @@ def run_instructions(model: AutoModelForCausalLM, tokenizer: AutoTokenizer,
         messages.append({"role": "system", "content": system_message})
         print(system_message)
     
-    if use_qwen_api:
-        history = []
-        client = Client("Qwen/Qwen2.5")
-
-        for i in range(len(prompts)):
-            prompts[i] = t2s.convert(prompts[i])
-            print(prompts[i])
-
-            if not test_mode:
-                response = client.predict(
-                    query=prompts[i],
-                    history=history,
-                    system=system_message,
-                    radio='72B',
-                    api_name="/model_chat_1"
-                )
-                history = response[1]
-            else:
-                response = "This is a placeholder response."
-            
-            print(response[1])
-        print('========== End Conversation ==========')
-        return response[1]
     
     for i in range(len(prompts)):
         print(f'---------- Instruction {i} ----------')
@@ -89,53 +56,49 @@ def run_instructions(model: AutoModelForCausalLM, tokenizer: AutoTokenizer,
         print(prompts[i])
 
         print(f'---------- Response {i} ----------')
-        if not test_mode:
-            text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
-            generated_ids = model.generate(**model_inputs, max_new_tokens=512, temperature=temperature)
-            generated_ids = [
-                output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-            ]
-            response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-        else:
-            response = "This is a placeholder response."
+
+        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True,  enable_thinking=True)
+        model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
+        generated_ids = model.generate(**model_inputs, max_new_tokens=8192, temperature=temperature)
+        generated_ids = [
+            output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+        ]
+        # response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+
+
+        think_end_id = tokenizer.convert_tokens_to_ids("</think>")
+
+        thinking, answer = [], []
+        for ids in generated_ids:
+            ids_list = ids.tolist()
+
+            try:
+                split = ids_list.index(think_end_id) + 1
+            except ValueError:
+                split = 0
+
+            thinking.append(
+                tokenizer.decode(ids_list[:split], skip_special_tokens=True).strip()
+            )
+            answer.append(
+                tokenizer.decode(ids_list[split:], skip_special_tokens=True).strip()
+            )
+
+        thinking_content = thinking[0]
+        # print(f"Thinking: {thinking_content}")
+        response = answer[0]
+
         messages.append({"role": "assistant", "content": response})
         print(response)
     print('========== End Conversation ==========')
     return messages
 
-# Main function for inference
+
 def main():
     args = parse_args()
     print(args)
-
-    # If use_qwen_api is set to True, skip model and tokenizer loading
     if not args.use_qwen_api:
-        # Conditionally define BitsAndBytesConfig based on dtype
-        if args.dtype == 'int8':
-            bnb_config = BitsAndBytesConfig(
-                load_in_8bit=True,
-                llm_int8_threshold=6.0,
-                llm_int8_enable_fp32_cpu_offload=True
-            )
-            model = AutoModelForCausalLM.from_pretrained(
-                args.model_name,
-                quantization_config=bnb_config,
-                device_map="auto"
-            )
-        elif args.dtype == 'int4':
-            bnb_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_use_double_quant=True,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_compute_dtype=torch.float16
-            )
-            model = AutoModelForCausalLM.from_pretrained(
-                args.model_name,
-                quantization_config=bnb_config,
-                device_map="auto"
-            )
-        elif args.dtype == 'fp16':
+        if args.dtype == 'fp16':
             model = AutoModelForCausalLM.from_pretrained(
                 args.model_name,
                 torch_dtype=torch.float16,
@@ -159,9 +122,6 @@ def main():
     else:
         model, tokenizer = None, None  # Set these to None if using API
 
-    # Load items dataset
-    tfidf_model = get_topk_items.TFIDFModel(args.corpus)
-    tfidf_model.initialize()
 
     # Load inference data
     with open(args.inference_file, 'rb') as file:
@@ -225,222 +185,48 @@ def main():
         prompts_t = [
             '请对商品名称「{item}」进行全面分析，并提供详细说明。',
             '从商品名称「{item}」中，提取属性「{attr}」的中文或英文实体，并输出结果。\n请注意: 有些商品可能不包含任何实体内容，而对于书籍类商品，则一律不进行标注。',
-            '仅输出属性「{attr}」的实体识别结果即可，不要输出任何多余的内容，若有多个实体，请用「、」分隔。'
+            '仅输出属性「{attr}」的实体识别结果即可，不要输出任何多余的内容，若有多个实体，请用「、」分隔。请注意：若一个实体同时包含中文与英文，应将其拆分为两个独立实体，且实体名称中不得包含多余的标点符号。',
+            '请确保输出仅包含实体及分隔符“、”，且所有实体必须严格为商品名称「{item}」中的连续子串；若已满足上述条件，请直接复用上一次输出，否则请先修正后再输出。'
         ]
+    
+    for i, p_name in enumerate(p_names):
+        system_message = system_message_t
+        
+        for tag, definition in annotation_rules.items():
+            if tag not in args.use_tag:
+                continue
+            if not args.save_results or os.path.exists(f'{args.result_dir}/{i}_{tag}.pkl'):
+                print(f"Skipping {i}_{tag} as results already exist.")
+                continue
+            prompts = [prompt.format(item=p_name, attr=tag, entity_definition=definition) for prompt in prompts_t]
 
+            messages = run_instructions(
+                model, tokenizer, prompts, system_message, args.temerature,
+                test_mode=args.test_mode, use_qwen_api=args.use_qwen_api
+            )
 
-
-    prompt_one_pass_t = [
-        '对该商品名称作命名实体识别（NER），找出目标实体。请注意，目标实体可能不存在于商品名称中。\n目标实体定义如下：\n{entity_definition}\n\n商品名稱如下：\n{item}',
-    ]
-
-
-    if args.interactive:
-        while True:
-            p_name = input("Enter product name: ")
-            corpus = '\n'.join(tfidf_model.query(p_name, top_k=args.top_k))
-            system_message = system_message_t.format(corpus=corpus)
-            for tag, definition in annotation_rules.items():
-                if tag not in args.use_tag:
-                    continue
-                prompts = [prompt.format(item=p_name, attr=tag, entity_definition=definition) for prompt in prompts_t]
-                messages = run_instructions(
-                    model, tokenizer, prompts, system_message, args.temerature,
-                    test_mode=args.test_mode, use_qwen_api=args.use_qwen_api
-                )
-    else:
-        for i, p_name in enumerate(p_names):
-            corpus = '\n'.join(tfidf_model.query(p_name, top_k=args.top_k))
-            system_message = system_message_t.format(corpus=corpus)
-            for tag, definition in annotation_rules.items():
-                if tag not in args.use_tag:
-                    continue
-                # if not args.save_results or os.path.exists(f'{args.result_dir}/{i}_{tag}.pkl'):
-                #     continue
-                prompts = [prompt.format(item=p_name, attr=tag, entity_definition=definition) for prompt in prompts_t]
-
-                # Call the inference function, passing None if using API
-                messages = run_instructions(
-                    model, tokenizer, prompts, system_message, args.temerature,
-                    test_mode=args.test_mode, use_qwen_api=args.use_qwen_api
-                )
-
-                # Save messages only if save_results is True
-                if args.save_results:
-                    os.makedirs(args.result_dir, exist_ok=True)
-                    with open(f'{args.result_dir}/{i}_{tag}.pkl', 'wb') as file:
-                        messages.insert(0,{'context': p_name, 'question':tag})
-                        pickle.dump(messages, file)
+            # Save messages only if save_results is True
+            if args.save_results:
+                os.makedirs(args.result_dir, exist_ok=True)
+                with open(f'{args.result_dir}/{i}_{tag}.pkl', 'wb') as file:
+                    messages.insert(0,{'context': p_name, 'question':tag})
+                    pickle.dump(messages, file)
 
 if __name__ == "__main__":
-    main()
+    MAX_RETRIES = 100
 
-
-
-
-
-
-
-
-
-
-
-# old: 
-
-# #%%
-# # Import libraries
-# import torch
-# import os
-# import pandas as pd
-# from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-# # from opencc import OpenCC
-
-# #%%
-# # Download the dataset if it does not exist
-# import get_dataset # This import itself will download the dataset, DO NOT REMOVE
-
-# #%%
-# # Define the model name
-# model_name = "Qwen/Qwen2.5-7B-Instruct"
-
-# # # Define the 8-bit configuration using BitsAndBytesConfig
-# # bnb_config = BitsAndBytesConfig(
-# #     load_in_8bit=True,          # Enable 8-bit quantization
-# #     llm_int8_threshold=6.0,     # Threshold for mixed 8-bit precision (optional)
-# #     llm_int8_enable_fp32_cpu_offload=True  # Enable CPU offloading for weights in fp32 (optional)
-# # )
-
-# # Define bitsandbytes configuration for loading in 4-bit or 8-bit precision
-# bnb_config = BitsAndBytesConfig(
-#     load_in_4bit=True,  # You can also set this to load_in_8bit=True for 8-bit quantization
-#     bnb_4bit_use_double_quant=True,  # Optional: Enables double quantization for more efficiency
-#     bnb_4bit_quant_type="nf4",  # Set the quantization type, options are 'fp4' or 'nf4'
-#     bnb_4bit_compute_dtype=torch.float16  # Default is float32, set this to torch.float16 for reduced precision
-# )
-
-# # Load the model with the bitsandbytes config for 8-bit precision
-# model = AutoModelForCausalLM.from_pretrained(
-#     model_name,
-#     quantization_config=bnb_config,  # Apply the 8-bit configuration
-#     device_map="auto",               # Automatically map model to available devices
-#     torch_dtype=torch.float16        # Optional: Use float16 precision where applicable
-# )
-
-# # Load the tokenizer
-# tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-# #%%
-# # Load items dataset
-# def load_items(path: str):
-#     # List all CSV files in the directory
-#     file_names = [f for f in os.listdir(path) if f.endswith('.csv')]
-
-#     # Load each CSV and concatenate them into a single DataFrame
-#     df_list = []
-#     for file_name in file_names:
-#         df = pd.read_csv(os.path.join(path, file_name))
-#         df_list.append(df)
-
-#     df_all = pd.concat(df_list, ignore_index=True)
-#     return df_all
-
-# items_dataset = load_items('random_samples_1M')
-
-# #%%
-# # Declare retrieval function.
-# def get_related_items(current_item_names: str, items_dataset: pd.DataFrame, top_k: int = 5):
-#     # Randomly sample items (pseudo retrieval)
-#     related_items = items_dataset.sample(top_k)
-#     related_items = related_items['product_name'].tolist()
-
-#     return related_items
-
-# #%%
-# # Declare multi-prompts inference function
-# def run_instructions(model: AutoModelForCausalLM, tokenizer: AutoTokenizer, 
-#                      prompts: list[str], system_message: str = None):
-#     # Initialize the conversation
-#     messages = []
-
-#     print('========== Start Conversation ==========')
-#     if system_message:
-#         print('---------- System Message ----------')
-#         messages.append({"role": "system", "content": system_message})
-#         print(system_message)
-    
-#     for i in range(len(prompts)):
-#         # Add user prompt to the conversation messages
-#         print(f'---------- Instruction {i} ----------')
-#         messages.append({"role": "user", "content": prompts[i]})
-#         print(prompts[i])
-
-#         # Tokenize the messages
-#         text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-#         model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
-
-#         # Generate the output
-#         generated_ids = model.generate(**model_inputs, max_new_tokens=512)
-#         generated_ids = [
-#             output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-#         ]
-
-#         # Decode the generated output
-#         print(f'---------- Response {i} ----------')
-#         response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-#         messages.append({"role": "assistant", "content": response})
-#         print(response)
-#     print('========== End Conversation ==========')
-
-#     return messages
-
-# #%%
-# # Define prompts template
-
-# system_message_t = "你是一位熟悉電子商務的助手，以下是供你參考的語料庫：\n{corpus}"
-
-# prompts_t = [
-#     '详细了解以下商品名称，尽可能辨认出你认识的所有关键词，并解释。\n{item}',
-#     '对该商品名称作命名实体识别（NER），找出目标实体。请注意，目标实体可能不存在于商品名称中。\n目标实体定义如下：\n{entity_definition}',
-#     '根据以上信息，重新输出商品名称，并将每个目标实体用 @@ 在开头、## 在结尾标记。\n请只输出商品名称，不要包含任何其他信息。',
-# ]
-
-# #%%
-# # Input configs
-
-# # Use one item from items_dataset as example
-# # item = items_dataset['product_name'][0]
-# item = '【御宅殿】25年3月預購 萬代 景品 火影忍者 Memorable Saga 宇智波佐助Ⅱ 咒印 1017'
-
-# #%%
-# # Build corpus (VERY IMPORTANT FOR THE ZERO-SHOT)
-
-# # # Use related items as corpus. Think of it as we trained ecombert with MLM on the MOMO+PC dataset.
-# # corpus = ', '.join(get_related_items(item, items_dataset, top_k=5))
-
-# # Use external knowledge as corpus (e.g. wikipedia). Currently its fixed and manually set, it can be automated with a simple RAG.
-# corpus = """《敗北女角太多了！》（日語：負けヒロインが多すぎる！，簡稱「マケイン」）是日本作家雨森焚火創作的輕小說系列，由《這個美術社大有問題！》作者伊右群擔綱插圖，2021年7月起經小學館旗下GAGAGA文庫發行。第15屆小學館輕小說大獎「GAGAGA獎」得獎作品[1]。改編漫畫由2022年4月29日起，在漫畫應用程式「Manga One」開始連載，由いたち繪畫[2]。2023年12月宣布電視動畫化[3]，於2024年7月至9月播放[4]。
-
-# 故事舞台為作者雨森焚火的出身地愛知縣豐橋市[1]。書名中的「敗北女角」（負けヒロイン）指在後宮型作品的戀愛競爭中，爭奪不了男主角或不肯承認爭奪男友失敗的女性角色[5]，在簡體中文翻譯中則譯為「敗犬女主」。本作是雨森的出道作[1]，也是正職漫畫家伊右群，初次繪畫輕小說封面和插圖[5]。"""
-
-# #%%
-# # Entity definitions
-
-# # Use one of the following definitions
-# definition_brand = '商品品牌名称，指具体标识商品或服务来源的品牌或厂牌名称，如华硕、LG、Apple、Sony 等，涵盖科技产品、家电、服装、汽车等各行业的品牌名称。不包括电商平台中的店铺名称、卖场名称或个人卖家名称。'
-# definition_series_THIS_TAG_SUCK = '商品中的所有产品系列，以及商家为特殊目的特别额外创造的商品名称，不包括特殊主题或产品类型，不含广告词。例如 iPhone 12、ROG 3060Ti。'
-# definition_ip = '与特定知名IP（如漫画、电影、文学作品）或其创作者相关的产品或创作。例子包括知名作品（如《海贼王》）或直接与创作者本人（如J.K. Rowling）相关的内容。此定义不包括公司、发行商或经纪公司等机构。'
-# definition_type = '具体产品名称（产品类型）。例如：电脑、滑鼠、键盘、萤幕、玩具、饼干、卫生纸等实体产品。'
-
-# #%%
-# # Inference
-
-# # Build system message with retrieved items
-# system_message = system_message_t.format(corpus=corpus)
-
-# # Build prompts with item and tag definition
-# prompts = [prompt.format(item=item, entity_definition=definition_ip) for prompt in prompts_t]
-
-# # Run instructions
-# messages = run_instructions(model, tokenizer, prompts, system_message)
-
-# #%%
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            print(f"\n==== Attempt {attempt}/{MAX_RETRIES} ====")
+            main()
+            break 
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            print(f"[ERROR] Run {attempt} failed: {e}")
+            print("→ Freeing memory and retrying …")
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+    else:
+        print("!!! All 100 attempts failed, giving up.")

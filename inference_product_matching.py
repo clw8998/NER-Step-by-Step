@@ -115,7 +115,7 @@ def main():
             model = AutoModelForCausalLM.from_pretrained(
                 args.model_name,
                 quantization_config=bnb_config,
-                device_map="auto"
+                device_map="cuda"
             )
         elif args.dtype == 'int4':
             bnb_config = BitsAndBytesConfig(
@@ -127,25 +127,25 @@ def main():
             model = AutoModelForCausalLM.from_pretrained(
                 args.model_name,
                 quantization_config=bnb_config,
-                device_map="auto"
+                device_map="cuda"
             )
         elif args.dtype == 'fp16':
             model = AutoModelForCausalLM.from_pretrained(
                 args.model_name,
                 torch_dtype=torch.float16,
-                device_map="auto"
+                device_map="cuda"
             )
         elif args.dtype == 'bf16':
             model = AutoModelForCausalLM.from_pretrained(
                 args.model_name,
                 torch_dtype=torch.bfloat16,
-                device_map="auto"
+                device_map="cuda"
             )
         else:
             model = AutoModelForCausalLM.from_pretrained(
                 args.model_name,
                 torch_dtype=torch.float32,
-                device_map="auto"
+                device_map="cuda"
             )
 
         # Load the tokenizer
@@ -179,6 +179,7 @@ def main():
         ]
 
     system_message_t = "你是一位熟悉電子商務的助手"
+    system_message_t = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
 
     if args.rag_corpus:
         system_message_t = "你是一位熟悉電子商務的助手，以下是供你參考的語料庫：\n{corpus}"
